@@ -6,16 +6,19 @@
 
 #
 # Usage:
-#   USB / dev webcam:   python camera_callibration.py
-#   RPi Camera Module:  python camera_callibration.py --rpi
-#   From saved images:  python camera_callibration.py --images path/to/folder
+#   USB / dev webcam:       python camera_callibration.py
+#   RPi (with display):     python camera_callibration.py --rpi
+#   RPi (headless / SSH):   python camera_callibration.py --rpi --headless
+#   From saved images:      python camera_callibration.py --images path/to/folder
 #
 # RPi setup (run once on the Pi):
 #   sudo apt install -y python3-picamera2
-#   # Camera Module v1 (OV5647) is detected automatically via libcamera.
-#   # No need to load bcm2835-v4l2 when using picamera2.
 #
-# Controls (live mode):
+# Headless mode: auto-captures a frame every --interval seconds whenever the
+# board is detected. Move the board to a new angle between beeps (terminal
+# prints). Stops automatically once MIN_FRAMES good frames are collected.
+#
+# Controls (live/display mode only):
 #   s  — save current frame for calibration
 #   q  — quit capture and run calibration
 
@@ -163,7 +166,7 @@ class _RpiCamera:
 
 
 def _run_capture_loop(camera, board, detector):
-    """Shared interactive capture loop. Returns (all_corners, all_ids, image_size)."""
+    """Interactive capture loop (requires a display). Returns (all_corners, all_ids, image_size)."""
     all_corners, all_ids = [], []
     image_size = None
     print("Press 's' to save frame, 'q' to finish & calibrate.")
@@ -201,38 +204,88 @@ def _run_capture_loop(camera, board, detector):
     return all_corners, all_ids, image_size
 
 
-def live_capture(camera_index=0, use_rpi=False):
+def _run_headless_loop(camera, board, detector, interval=3.0):
+    """Headless capture loop — no display required.
+
+    Auto-captures a frame every `interval` seconds when the board is detected.
+    Move the board to a new position/angle between captures.
+    Returns (all_corners, all_ids, image_size).
+    """
+    import time
+    all_corners, all_ids = [], []
+    image_size = None
+    last_capture = 0.0
+
+    print(f"Headless mode: auto-capturing every {interval}s when board is visible.")
+    print(f"Move the board to a new angle between captures. Need {MIN_FRAMES} frames.")
+    print("Press Ctrl+C to abort.")
+
+    try:
+        while len(all_corners) < MIN_FRAMES:
+            frame = camera.read()
+            if frame is None:
+                print("Camera read failed.")
+                break
+            if image_size is None:
+                image_size = (frame.shape[1], frame.shape[0])
+
+            corners, ids = _detect(frame, detector)
+            now = time.monotonic()
+
+            if corners is not None and (now - last_capture) >= interval:
+                all_corners.append(corners)
+                all_ids.append(ids)
+                last_capture = now
+                print(f"  Captured frame {len(all_corners)}/{MIN_FRAMES}  ({len(ids)} corners)")
+            elif corners is None:
+                print("  Board not visible — reposition and hold steady...", end="\r")
+
+    except KeyboardInterrupt:
+        print("\nAborted by user.")
+
+    return all_corners, all_ids, image_size
+
+
+def live_capture(camera_index=0, use_rpi=False, headless=False, interval=3.0):
     board, _ = _make_board()
     detector = aruco.CharucoDetector(board)
 
     camera = _RpiCamera() if use_rpi else _UsbCamera(camera_index)
     try:
-        all_corners, all_ids, image_size = _run_capture_loop(camera, board, detector)
+        if headless:
+            all_corners, all_ids, image_size = _run_headless_loop(
+                camera, board, detector, interval=interval
+            )
+        else:
+            all_corners, all_ids, image_size = _run_capture_loop(camera, board, detector)
     finally:
         camera.release()
 
     if len(all_corners) < MIN_FRAMES:
         sys.exit(
-            f"Only {len(all_corners)} frames saved (need {MIN_FRAMES}). "
-            "Re-run and capture more frames from various angles."
+            f"Only {len(all_corners)} frames captured (need {MIN_FRAMES}). "
+            "Re-run and move the board to more varied angles."
         )
-    camera_matrix, dist_coeffs, _ = calibrate(all_corners, all_ids, image_size, board)
+    calibrate(all_corners, all_ids, image_size, board)
 
-    # Quick visual check — show undistorted feed
-    print("\nShowing undistorted feed. Press any key to exit.")
-    camera2 = _RpiCamera() if use_rpi else _UsbCamera(camera_index)
-    try:
-        while True:
-            frame = camera2.read()
-            if frame is None:
-                break
-            undistorted = cv2.undistort(frame, camera_matrix, dist_coeffs)
-            cv2.imshow("Undistorted (verification)", undistorted)
-            if cv2.waitKey(1) & 0xFF != 255:
-                break
-    finally:
-        camera2.release()
-    cv2.destroyAllWindows()
+    if not headless:
+        # Quick visual check — only possible when a display is available
+        print("\nShowing undistorted feed. Press any key to exit.")
+        camera2 = _RpiCamera() if use_rpi else _UsbCamera(camera_index)
+        camera_matrix = np.load(OUTPUT_FILE)["camera_matrix"]
+        dist_coeffs   = np.load(OUTPUT_FILE)["dist_coeffs"]
+        try:
+            while True:
+                frame = camera2.read()
+                if frame is None:
+                    break
+                undistorted = cv2.undistort(frame, camera_matrix, dist_coeffs)
+                cv2.imshow("Undistorted (verification)", undistorted)
+                if cv2.waitKey(1) & 0xFF != 255:
+                    break
+        finally:
+            camera2.release()
+        cv2.destroyAllWindows()
 
 
 def main():
@@ -254,12 +307,25 @@ def main():
         action="store_true",
         help="Use RPi Camera Module (picamera2) instead of a USB camera",
     )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="No display/GUI: auto-capture frames on a timer (use when running over SSH)",
+    )
+    parser.add_argument(
+        "--interval",
+        type=float,
+        default=3.0,
+        metavar="SECONDS",
+        help="Seconds between auto-captures in headless mode (default: 3)",
+    )
     args = parser.parse_args()
 
     if args.images:
         from_images(args.images)
     else:
-        live_capture(camera_index=args.camera, use_rpi=args.rpi)
+        live_capture(camera_index=args.camera, use_rpi=args.rpi,
+                     headless=args.headless, interval=args.interval)
 
 
 if __name__ == "__main__":
