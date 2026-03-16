@@ -1,7 +1,7 @@
 from math import acos, atan2, cos, sin, pi
 from numpy import rad2deg
 import serial
-import waypoints
+#import waypoints
 
 #arduino = serial.Serial(port = 'COM5', baudrate = 115200)
 

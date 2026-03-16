@@ -172,26 +172,25 @@ def capture_single_frame(args):
 def main():
     args = parse_args()
     vision = PlateVisionSystem()
-    plate = Plates()
     # type_to_marker_id = {v: k for k, v in vision.ID_TO_TYPE.items()} #
     # target_marker_id = type_to_marker_id[args.plate_type]
 
     #target marker to be given by UDP form node-red, for now try 96-well marker
     target_marker_id = 0
-
+    plate = Plates(vision.ID_TO_TYPE.get(target_marker_id))
     camera_mode, raw_frame = capture_single_frame(args)
     frame = preprocess_frame(raw_frame, undistort=not args.no_undistort)
 
       #return (br_x, br_y), angle, [corners[selected_index]], marker_id
 
+    arm_center = vision.arm_coord(frame)
     br, angle, plate_corners, marker_id = vision.get_plate_pose(frame, target_marker_id=target_marker_id)
     if plate_corners is not None:
             scale = vision.setScale(plate_corners, vision.PLATE_MARKER_DIMENSION_MM) 
             br = (br[0]/scale, br[1]/scale) #convert from pixels to mm using scale
+            arm_center = (arm_center[0]/scale, arm_center[1]/scale) 
     else: 
         scale = None
-
-    arm_center = vision.arm_coord(frame)
 
     plate_topLeft = plate.marker_to_well(angle, br)
     translation_vector = plate.top_left_to_arm(plate_topLeft, arm_center) # in mm (arm_center converted to mm)
@@ -209,7 +208,7 @@ def main():
         preview = frame.copy()
         if plate_corners is not None:
             cv2.aruco.drawDetectedMarkers(preview, plate_corners)
-            vision.draw_position_info(preview, br, angle, plate_corners)
+            vision.draw_position_info(preview, angle, br)
         cv2.imshow("Plate Detection", preview)
         cv2.waitKey(0)
         cv2.destroyAllWindows()

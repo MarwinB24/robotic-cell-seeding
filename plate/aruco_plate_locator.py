@@ -17,8 +17,9 @@ class PlateVisionSystem:
     }
     ARM_MARKER_ID = 4
     PLATE_MARKER_IDS = {0, 1, 2, 3}
+    PLATE_MARKER_DIMENSION_MM = 32 #35
     
-    def __init__(self, marker_dict=aruco.DICT_4X4_50):
+    def __init__(self, marker_dict=aruco.DICT_ARUCO_ORIGINAL,): #DICT_4X4_50
         # Initialize ArUco settings
         self.dictionary = aruco.getPredefinedDictionary(marker_dict)
         self.parameters = aruco.DetectorParameters()
@@ -48,11 +49,11 @@ class PlateVisionSystem:
         return 0
 
     def _br_from_detection(self, corners, ids, selected_index): #uses result from _detect_markers and index from _select_marker_index
-        c = corners[selected_index][0]
+        c = corners[selected_index][0] 
         br_x, br_y = c[2] #this is shortcut for c[2][:]
         marker_id = ids[selected_index][0]
         angle = np.arctan2(c[1][1] - c[0][1], c[1][0] - c[0][0])
-        return (br_x, br_y), angle, [corners[selected_index]], marker_id
+        return (br_x, br_y), angle, c, marker_id
 
 
     def get_plate_pose(self, frame, target_marker_id=None): # I didn't write
@@ -68,8 +69,12 @@ class PlateVisionSystem:
         return None, None, None, None
     
     def arm_coord(self, frame):
-        arm_coords = self.get_plate_pose(frame, self.ARM_MARKER_ID)
-        return arm_coords[0] #returns just the centre of the marker
+        arm = self.get_plate_pose(frame, self.ARM_MARKER_ID)
+        arm_coords = arm[2] #corners of arm marker
+        center_x = np.mean(arm_coords[:, 0])
+        center_y = np.mean(arm_coords[:, 1])
+        center = (center_x, center_y)        
+        return center #returns just the centre of the marker
 
     def setScale(self, corner, markerDimension): #pixel distance device by scale gives mm
         return (corner[1][0] - corner[0][0]) / markerDimension #pixels per mm
