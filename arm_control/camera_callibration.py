@@ -52,20 +52,33 @@ def _make_board():
     return board, dictionary
 
 
+MIN_CORNERS_PER_FRAME = 6  # need >=6 for a stable homography in Zhang's method
+
+
 def _detect(frame, detector):
     """Return (charuco_corners, charuco_ids) or (None, None) if too few detected."""
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     charuco_corners, charuco_ids, _, _ = detector.detectBoard(gray)
-    if charuco_ids is not None and len(charuco_ids) >= 4:
+    if charuco_ids is not None and len(charuco_ids) >= MIN_CORNERS_PER_FRAME:
         return charuco_corners, charuco_ids
     return None, None
 
 
 def calibrate(all_corners, all_ids, image_size, board):
     """Run cv2.aruco calibration from accumulated detections."""
-    print(f"\nCalibrating with {len(all_corners)} frames...")
+    # Drop any frame that has fewer than MIN_CORNERS_PER_FRAME corners
+    # (can happen if detection quality degraded between capture and calibration).
+    filtered = [(c, i) for c, i in zip(all_corners, all_ids)
+                if len(i) >= MIN_CORNERS_PER_FRAME]
+    if len(filtered) < MIN_FRAMES:
+        sys.exit(
+            f"Only {len(filtered)} frames have enough corners after filtering "
+            f"(need {MIN_FRAMES}). Re-run and ensure the full board is clearly visible."
+        )
+    all_corners, all_ids = zip(*filtered)
+    print(f"\nCalibrating with {len(all_corners)} frames ({len(filtered)} passed filter)...")
     ret, camera_matrix, dist_coeffs, rvecs, tvecs = aruco.calibrateCameraCharuco(
-        all_corners, all_ids, board, image_size, None, None
+        list(all_corners), list(all_ids), board, image_size, None, None
     )
     print(f"Reprojection error: {ret:.4f} px")
     print(f"Camera matrix:\n{camera_matrix}")
