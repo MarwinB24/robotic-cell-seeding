@@ -1,0 +1,76 @@
+# Well Plate Class Structure Plan
+
+## Overview
+
+Your system detects different well plate types via ArUco markers and needs to handle 96, 24, 12, and 6-well plates with different specifications and operations.
+
+## Recommended Structure
+
+### Parent Class: `Plates`
+- Store plate metadata and position
+- Handle plate identification and type mapping
+- Store well count and dimensions
+
+### Child Classes: `well96`, `well24`, `well12`, `well6`
+- Store plate-specific geometry (well spacing, diameter, offset calculations)
+- Implement plate-specific methods for coordinate transformation
+- Calculate well positions from detected marker position/angle
+- Calibration for pixels to mm
+
+## Implementation Steps
+
+### 1. Enhance Parent `Plates` Class
+
+Add the following properties:
+- `plate_type` property (set by child class)
+- `num_wells` property (96, 24, 12, or 6)
+- `well_spacing` property (distance between well centers in mm)
+- `well_diameter` property
+- `calculate_well_position(marker_center, angle, well_index)` method
+
+### 2. Each Child Class Configuration
+
+Each child class (well96, well24, well12, well6) should set:
+- `self.num_wells` (96, 24, 12, 6 respectively)
+- `self.well_spacing` (e.g., 9mm for 96-well, 19mm for 24-well)
+- `self.well_diameter` (plate-specific)
+- Optional: `self.rows` and `self.cols` (8x12 for 96-well, 4x6 for 24-well, etc.)
+
+### 3. Utility Methods in `Plates`
+
+Add these methods:
+- `get_well_grid()` - returns rows/cols layout
+- `validate_well_index(index)` - check if well exists
+- `index_to_row_col(index)` - convert linear index to row/col
+- `row_col_to_index(row, col)` - convert row/col to linear index
+
+### 4. Coordinate Transformation Method
+
+Implement in `Plates`:
+- Takes marker detection data (center, angle)
+- Returns list of all well positions in camera coordinates
+- Accounts for plate rotation angle from vision system
+
+### 5. Update `main.py`
+
+Changes needed:
+- Instantiate correct child class based on detected marker ID
+- Use `calculate_well_position()` to get robot target coordinates
+
+## Further Considerations
+
+1. **Well indexing convention?** 
+   - Row-major (A1-H12 for 96-well) vs. linear (0-95)?
+
+2. **Calibration data?** 
+   - Do you need pixel-to-mm conversion calibration, or is this pre-calibrated?
+
+3. **Offset handling?** 
+   - Should the plate class account for robot gripper offset, or should `main.py` handle that?
+
+## Current State
+
+- Parent class `Plates` exists with `identify_plate(marker_id)` method
+- Child classes exist but are minimal (only call `super().__init__()`)
+- Vision system (`PlateVisionSystem`) detects marker position and angle
+- Main.py uses both systems but doesn't yet leverage coordinate transformation

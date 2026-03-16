@@ -2,17 +2,30 @@ import cv2
 import cv2.aruco as aruco
 import numpy as np
 
+#add scaling from pixels to mm (measure known distance and distance on camera percieved to get ratio)
+#take corner of aruco and subtract, we know this distance
+
 class PlateVisionSystem:
+    ID_TO_TYPE = {
+        0: "96well",
+        1: "24well",
+        2: "12well",
+        3: "6well",
+        4: "Scara_Arm_Centre",
+        5: "Tip_Box",
+        6: "Waste_Bin",
+    }
+    
     def __init__(self, marker_dict=aruco.DICT_4X4_50):
         # Initialize ArUco settings
         self.dictionary = aruco.getPredefinedDictionary(marker_dict)
         self.parameters = aruco.DetectorParameters()
         self.detector = aruco.ArucoDetector(self.dictionary, self.parameters)
 
-    def get_plate_pose(self, frame):
+    def get_plate_pose(self, frame, target_marker_id=None): # I didn't write
         """Returns (x, y) center, angle, marker corners, and marker ID of detected plate"""
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        corners, ids, rejected = self.detector.detectMarkers(gray)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) # converts to grayscale
+        corners, ids, rejected = self.detector.detectMarkers(gray) # detect markers
         
         # Debug: Show detection status
         # if ids is None:
@@ -21,19 +34,37 @@ class PlateVisionSystem:
         #     print(f"Detected {len(ids)} marker(s)")
         
         if ids is not None and len(ids) > 0:
-            # Get first detected plate
-            c = corners[0][0]
-            center_x = np.mean(c[:, 0])
-            center_y = np.mean(c[:, 1])
-            marker_id = ids[0][0]  # Extract marker ID
+            # Select marker by desired ID when provided
+            selected_index = 0
+            if target_marker_id is not None:
+                for i, mid in enumerate(ids.flatten()):
+                    if int(mid) == int(target_marker_id):
+                        selected_index = i
+                        break
+
+            # Use selected marker
+            c = corners[selected_index][0]
+            center_x = np.mean(c[:, 0]) #x corners, [0][0] is top left then clockwise, [1][0] [2][0] [3][0]
+            center_y = np.mean(c[:, 1]) #y corners, same pattern as above but [y][1]
+            marker_id = ids[selected_index][0]  # Extract marker ID
             
             # Calculate angle for axis rotation
-            angle = np.arctan2(c[1][1] - c[0][1], c[1][0] - c[0][0])
+            angle = np.arctan2(c[1][1] - c[0][1], c[1][0] - c[0][0]) # y coord, x coord
             
-            return (center_x, center_y), angle, corners[0:1], c, marker_id
+            return (center_x, center_y), angle, [corners[selected_index]], c, marker_id
         return None, None, None, None, None
     
-    def draw_position_info(self, frame, center, angle_rad, marker_corners):
+    def arm_coord(self):
+        arm_coords = self.get_plate_pose(frame, 4)
+        return arm_coords[0] #returns just the centre of the marker
+
+    def setScale(self, corner, markerDimension):
+        return (corner[1][0] - corner[0][0]) / markerDimension
+
+    def identify_plate(self, marker_id): #use this with config for well_plates class
+        return self.ID_TO_TYPE.get(marker_id, "Unknown Plate Type")
+    
+    def draw_position_info(self, frame, center, angle_rad, marker_corners): # I didn't write
         """Draw position and axes at top left corner of ArUco marker"""
         if center is None or marker_corners is None:
             return
@@ -68,7 +99,7 @@ class PlateVisionSystem:
         cv2.putText(frame, f"TL Y: {marker_corners[0][1]:.1f}", (origin_x + 5, origin_y),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 0), 1)
     
-    def draw_grid(self, frame, grid_spacing=50):
+    def draw_grid(self, frame, grid_spacing=50): #I didn't write
         """Draw a grid overlay on the frame"""
         h, w = frame.shape[:2]
         color = (100, 100, 100)  # Dark gray
@@ -86,14 +117,17 @@ class PlateVisionSystem:
 if __name__ == "__main__":
     vision = PlateVisionSystem()
     cap = cv2.VideoCapture(0)
+    target_marker_id = None
 
     while True:
         ret, frame = cap.read()
         if not ret:
             print("Failed to read frame")
             break
-        
-        center, angle, corners, marker_corners, marker_id = vision.get_plate_pose(frame)
+
+        center, angle, corners, marker_corners, marker_id = vision.get_plate_pose(
+            frame, target_marker_id=target_marker_id
+        )
         
         # Draw grid on frame (AFTER detection to not interfere)
         vision.draw_grid(frame, grid_spacing=50)
@@ -107,8 +141,19 @@ if __name__ == "__main__":
             #            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
         cv2.imshow("Plate Detection", frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
             break
+        elif key == ord('1'):
+            target_marker_id = 0  # 96-well
+        elif key == ord('2'):
+            target_marker_id = 1  # 24-well
+        elif key == ord('3'):
+            target_marker_id = 2  # 12-well
+        elif key == ord('4'):
+            target_marker_id = 3  # 6-well
+        elif key == ord('0'):
+            target_marker_id = None  # accept any
 
     cap.release()
     cv2.destroyAllWindows()

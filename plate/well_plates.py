@@ -1,35 +1,77 @@
-class Plates:        
-    def __init__(self, plate_pos = None):
-        self.plate_pos = plate_pos        
+#using big printer, printer 8, printer 11, printer 10
+#marker to A1 (96-well) 1.4 vertically, 1.7cm horizontally
 
-    def identify_plate(self, marker_id):
-        id_plate = {
-            10 : '96well',
-            15 : '24well',
-            20 : '12well',
-            25 : '6well'      
-        }
+#raspberry pi, user: aspamtech, pw: aspamBTV2026
 
-        return id_plate.get(marker_id, 'Unknown Plate Type') #.get() returns 'unknown' if no ID found
+import numpy as np
+
+class Plates:
+    PLATE_CONFIGS = {
+        "96well": {"rows": 8, "cols": 12, "pitch_mmX": 9.0, "pitch_mmY": 9.0, "xApart": 17, "yApart": 14},
+        "24well": {"rows": 4, "cols": 6, "pitch_mmX": 19.0, "pitch_mmY": 19.0, "xApart": 39, "yApart": 39},
+        "12well": {"rows": 3, "cols": 4, "pitch_mmX": 26.0, "pitch_mmY": 26.0, "xApart": 52, "yApart": 52},
+        "6well": {"rows": 2, "cols": 3, "pitch_mmX": 39.0, "pitch_mmY": 39.0, "xApart": 78, "yApart": 78},
+    }
+
+    def __init__(self, plate_type=None, plate_pos=None):
+        self.plate_pos = plate_pos
+        self.plate_type = plate_type
+        if plate_type:
+            self.config = self.PLATE_CONFIGS.get(plate_type)
+
+    def marker_to_well(self, angle, markerBotLeft):
+        # Offset from marker corner to well-plate A1 in the marker's local frame.
+        # xApart is along the marker's local X axis, yApart is along its local -Y axis.
+        offset = np.array([self.config["xApart"], -self.config["yApart"]])
+
+        # Rotate into the camera/pixel frame using the marker's detected angle.
+        R = np.array([[np.cos(angle), -np.sin(angle)],
+                      [np.sin(angle),  np.cos(angle)]])
+        rotated_offset = R @ offset
+
+        topLeft = (markerBotLeft[0] + rotated_offset[0],
+                   markerBotLeft[1] + rotated_offset[1])
+        return topLeft
+   
+    def well_coordinate(self, topLeft): #topLeft array (x,y)
+        x_coords = [topLeft[0] + (i * self.config["pitch_mmX"]) for i in range(self.config["cols"])]
+        y_coords = [topLeft[1] + (i * self.config["pitch_mmY"]) for i in range(self.config["rows"])]
+
+        # 2. Create the 2D grid (Matrix)
+        X, Y = np.meshgrid(x_coords, y_coords)
+
+        # 3. Combine them into (x, y) pairs if needed
+        grid_points = np.vstack([X.ravel(), Y.ravel()]).T
+        return grid_points   
     
-class well96(Plates):
-    def __init__(self, plate_pos):
-        super().__init__(plate_pos)
+    def rotate_grid(self, grid_points, angle_rad): #origin isn't needed, every coordinate is rotated around the origin (0,0) and then translated back to original position
+        rotation_matrix = np.array([[np.cos(angle_rad), -np.sin(angle_rad)],
+                                    [np.sin(angle_rad),  np.cos(angle_rad)]])
+        rotated_points = grid_points @ rotation_matrix.T
+        return rotated_points
+    
+    #arm coordinates found using aruco_plate_locator func 'arm_coord'
+    def top_left_to_arm(self, grid_points, topLeft, arm_center_pos):
+        # Translates grid relative to the arm pos (using offset from top_left to arm center)
+        # Basically redefining the origin (coordinate system), arm is centre instead of top_left
+        # This is what is sent to the arduino
+        translation_vector = np.array(arm_center_pos) - np.array(topLeft)
 
-class well24(Plates):
-    def __init__(self, plate_pos):
-        super().__init__(plate_pos)
-
-class well12(Plates):
-    def __init__(self, plate_pos):
-        super().__init__(plate_pos)
-
-class well6(Plates):
-    def __init__(self, plate_pos):
-        super().__init__(plate_pos)
+        translated_points = grid_points + translation_vector
+        return translated_points
 
 def main():
     print('ooga!')
+    plate1 = Plates("96well")
+    topLeft = plate1.marker_to_well(0, (0,0))
+    print(topLeft)
+    grid = plate1.well_coordinate(topLeft)
+    print(grid)
+    rotated_grid = plate1.rotate_grid(grid, np.radians(np.pi / 2))
+    print(rotated_grid)
+    #print(type(grid[0]))
+    #print(type(grid[0][0]))
+    print()
     pass
 
 if __name__ == "__main__":
