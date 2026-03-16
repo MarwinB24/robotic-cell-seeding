@@ -180,6 +180,7 @@ def main():
     plate = Plates(vision.ID_TO_TYPE.get(target_marker_id))
     camera_mode, raw_frame = capture_single_frame(args)
     frame = preprocess_frame(raw_frame, undistort=not args.no_undistort)
+    cv2.imwrite("/home/aspamtech/robotic-cell-seeding/debug/capture.jpg", frame)
 
       #return (br_x, br_y), angle, [corners[selected_index]], marker_id
 
@@ -191,6 +192,7 @@ def main():
             arm_center = (arm_center[0]/scale, arm_center[1]/scale) 
     else: 
         scale = None
+
 
     plate_topLeft = plate.marker_to_well(angle, br)
     translation_vector = plate.top_left_to_arm(plate_topLeft, arm_center) # in mm (arm_center converted to mm)
