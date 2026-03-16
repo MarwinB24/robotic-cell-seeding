@@ -13,8 +13,7 @@ class Plates:
         "6well": {"rows": 2, "cols": 3, "pitch_mmX": 39.0, "pitch_mmY": 39.0, "xApart": 78, "yApart": 78},
     }
 
-    def __init__(self, plate_type=None, plate_pos=None):
-        self.plate_pos = plate_pos
+    def __init__(self, plate_type=None):
         self.plate_type = plate_type
         if plate_type:
             self.config = self.PLATE_CONFIGS.get(plate_type)
@@ -32,8 +31,19 @@ class Plates:
         topLeft = (markerBotLeft[0] + rotated_offset[0],
                    markerBotLeft[1] + rotated_offset[1])
         return topLeft
-   
-    def well_coordinate(self, topLeft): #topLeft array (x,y)
+    
+    #arm coordinates found using aruco_plate_locator func 'arm_coord'
+    def top_left_to_arm(self, topLeft, arm_center_pos): #need to setscale, pixel to mm
+        # Translates grid relative to the arm pos (using offset from top_left to arm center)
+        # Basically redefining the origin (coordinate system), arm is centre instead of top_left
+        # This is what is sent to the inverse kinematics
+        # It doesn't matter if it is pixels or mm (relative calcs) but prefer mm since arm joints is measure in mm
+        translation_vector = np.array(arm_center_pos) - np.array(topLeft)
+
+        return translation_vector
+    
+    def well_coordinate(self, topLeft, translation_vector): #topLeft array (x,y)
+        topLeft = topLeft + translation_vector #relative to arm
         x_coords = [topLeft[0] + (i * self.config["pitch_mmX"]) for i in range(self.config["cols"])]
         y_coords = [topLeft[1] + (i * self.config["pitch_mmY"]) for i in range(self.config["rows"])]
 
@@ -44,21 +54,12 @@ class Plates:
         grid_points = np.vstack([X.ravel(), Y.ravel()]).T
         return grid_points   
     
-    def rotate_grid(self, grid_points, angle_rad): #origin isn't needed, every coordinate is rotated around the origin (0,0) and then translated back to original position
+    def rotate_grid(self, grid_points, angle_rad, topLeft): #set origin has topLEft
         rotation_matrix = np.array([[np.cos(angle_rad), -np.sin(angle_rad)],
                                     [np.sin(angle_rad),  np.cos(angle_rad)]])
-        rotated_points = grid_points @ rotation_matrix.T
-        return rotated_points
-    
-    #arm coordinates found using aruco_plate_locator func 'arm_coord'
-    def top_left_to_arm(self, grid_points, topLeft, arm_center_pos):
-        # Translates grid relative to the arm pos (using offset from top_left to arm center)
-        # Basically redefining the origin (coordinate system), arm is centre instead of top_left
-        # This is what is sent to the arduino
-        translation_vector = np.array(arm_center_pos) - np.array(topLeft)
-
-        translated_points = grid_points + translation_vector
-        return translated_points
+        centered_points = grid_points - topLeft
+        rotated_points = centered_points @ rotation_matrix.T
+        return rotated_points + topLeft
 
 def main():
     print('ooga!')
