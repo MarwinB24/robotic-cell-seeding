@@ -200,8 +200,13 @@ def main():
     
     #inverse kinematics block now
     target_pos = []
+    invalid_targets = []
     for coord in first_row:
-        ik(coord)
+        try:
+            ik(coord)
+        except ValueError as exc:
+            invalid_targets.append({"coord": coord.tolist() if hasattr(coord, "tolist") else coord, "error": str(exc)})
+            continue
         target_pos.append(coord)
 
     if args.preview:
@@ -218,6 +223,7 @@ def main():
         "plate_detected": br is not None,
         "angle": np.rad2deg(angle),
         "target_coordinates": target_pos,
+        "invalid_targets": invalid_targets,
 
         # "detected_marker_ids": [
         #     marker_id for marker_id in [
@@ -226,7 +232,7 @@ def main():
         #     ]
         #     if marker_id is not None
         # ],
-        "success": bool(br[0] is not None and arm_center is not None),
+        "success": bool(br[0] is not None and arm_center is not None and len(invalid_targets) == 0),
     }
 
     json_text = json.dumps(
