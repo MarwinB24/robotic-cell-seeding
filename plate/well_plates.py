@@ -38,21 +38,20 @@ class Plates:
         # Basically redefining the origin (coordinate system), arm is centre instead of top_left
         # This is what is sent to the inverse kinematics
         # It doesn't matter if it is pixels or mm (relative calcs) but prefer mm since arm joints is measure in mm
-        translation_vector = np.array(arm_center_pos) - np.array(topLeft)
+        translation_vector = np.array(topLeft) - np.array(arm_center_pos)
 
         return translation_vector
     
-    def well_coordinate(self, topLeft, translation_vector): #topLeft array (x,y)
-        topLeft = topLeft + translation_vector #relative to arm
-        x_coords = [topLeft[0] + (i * self.config["pitch_mmX"]) for i in range(self.config["cols"])]
-        y_coords = [topLeft[1] + (i * self.config["pitch_mmY"]) for i in range(self.config["rows"])]
+    def well_coordinate(self, translation_vector): #topLeft array (x,y)
+        x_coords = [translation_vector[0] + (i * self.config["pitch_mmX"]) for i in range(self.config["cols"])]
+        y_coords = [translation_vector[1] + (i * self.config["pitch_mmY"]) for i in range(self.config["rows"])]
 
         # 2. Create the 2D grid (Matrix)
         X, Y = np.meshgrid(x_coords, y_coords)
 
         # 3. Combine them into (x, y) pairs if needed
         grid_points = np.vstack([X.ravel(), Y.ravel()]).T
-        return grid_points   
+        return grid_points
     
     def rotate_grid(self, grid_points, angle_rad, topLeft): #set origin has topLEft
         rotation_matrix = np.array([[np.cos(angle_rad), -np.sin(angle_rad)],

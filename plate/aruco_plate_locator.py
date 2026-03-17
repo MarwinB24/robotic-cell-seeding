@@ -19,7 +19,7 @@ class PlateVisionSystem:
     PLATE_MARKER_IDS = {0, 1, 2, 3}
     PLATE_MARKER_DIMENSION_MM = 32 #35
     
-    def __init__(self, marker_dict=aruco.DICT_ARUCO_ORIGINAL,): #DICT_4X4_50
+    def __init__(self, marker_dict=aruco.DICT_ARUCO_ORIGINAL): #DICT_4X4_50
         # Initialize ArUco settings
         self.dictionary = aruco.getPredefinedDictionary(marker_dict)
         self.parameters = aruco.DetectorParameters()
@@ -71,13 +71,23 @@ class PlateVisionSystem:
     def arm_coord(self, frame):
         arm = self.get_plate_pose(frame, self.ARM_MARKER_ID)
         arm_coords = arm[2] #corners of arm marker
+        angle = arm[1]
         center_x = np.mean(arm_coords[:, 0])
         center_y = np.mean(arm_coords[:, 1])
         center = (center_x, center_y)        
-        return center #returns just the centre of the marker
+        return center, angle #returns just the centre of the marker
 
     def setScale(self, corner, markerDimension): #pixel distance device by scale gives mm
-        return (corner[1][0] - corner[0][0]) / markerDimension #pixels per mm
+        c = corner.astype(np.float32)  # shape (4,2)
+        d01 = np.linalg.norm(c[1] - c[0]) #linalg.norm calculates Euclidean distance between 2 points
+        d12 = np.linalg.norm(c[2] - c[1])
+        d23 = np.linalg.norm(c[3] - c[2])
+        d30 = np.linalg.norm(c[0] - c[3])
+
+        mean_side_px = np.mean([d01, d12, d23, d30])
+        px_per_mm = mean_side_px / markerDimension
+        print(px_per_mm)
+        return px_per_mm
 
     def identify_plate(self, marker_id): #use this with config for well_plates class
         if marker_id is None:
