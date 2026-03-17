@@ -1,6 +1,7 @@
 import argparse
 import importlib
 import json
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -180,7 +181,47 @@ def main():
     plate = Plates(vision.ID_TO_TYPE.get(target_marker_id))
     camera_mode, raw_frame = capture_single_frame(args)
     frame = preprocess_frame(raw_frame, undistort=not args.no_undistort)
-    cv2.imwrite("/home/aspamtech/robotic-cell-seeding/debug/capture.jpg", frame)
+
+    # Save an annotated debug frame with marker perimeter and corner coordinates.
+    debug_frame = frame.copy()
+    corners, ids, _ = vision._detect_markers(frame)
+    if ids is not None and len(ids) > 0:
+        cv2.aruco.drawDetectedMarkers(debug_frame, corners, ids)
+        for i, corner in enumerate(corners):
+            pts = corner[0].astype(np.float32)
+            marker_id_text = int(ids[i][0])
+            perimeter_px = cv2.arcLength(pts, True)
+
+            center = np.mean(pts, axis=0).astype(int)
+            cv2.putText(
+                debug_frame,
+                f"id:{marker_id_text} peri:{perimeter_px:.1f}px",
+                (int(center[0]) + 6, int(center[1]) - 6),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (0, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+
+            for idx, p in enumerate(pts):
+                px, py = int(p[0]), int(p[1])
+                cv2.circle(debug_frame, (px, py), 3, (0, 255, 255), -1)
+                cv2.putText(
+                    debug_frame,
+                    f"{idx}:({px},{py})",
+                    (px + 4, py - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.35,
+                    (255, 255, 0),
+                    1,
+                    cv2.LINE_AA,
+                )
+
+    debug_dir = Path(__file__).resolve().parent / "debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    debug_image_path = debug_dir / "capture.jpg"
+    cv2.imwrite(str(debug_image_path), debug_frame)
 
       #return (br_x, br_y), angle, [corners[selected_index]], marker_id
 
