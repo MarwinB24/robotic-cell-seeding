@@ -150,6 +150,20 @@ def preprocess_frame(frame, undistort=True):
     return cv2.undistort(frame, DEFAULT_CAMERA_MATRIX, DEFAULT_DIST_COEFFS, None, new_mtx)
 
 
+def to_robot_point(pt, frame_height):
+    """Convert an (x, y) image-space point to robot/cartesian space."""
+    return (pt[0], frame_height - pt[1])
+
+
+def to_robot_corners(marker_corners, frame_height):
+    """Convert marker corners array from image-space to robot/cartesian space."""
+    if marker_corners is None:
+        return None
+    marker_corners = np.array(marker_corners, dtype=np.float32)
+    marker_corners[:, 1] = frame_height - marker_corners[:, 1]
+    return marker_corners
+
+
 def capture_single_frame(args):
     if args.image:
         frame = cv2.imread(args.image)
@@ -181,10 +195,15 @@ def main():
     plate = Plates(vision.ID_TO_TYPE.get(target_marker_id))
     camera_mode, raw_frame = capture_single_frame(args)
     frame = preprocess_frame(raw_frame, undistort=not args.no_undistort)
+    frame_h = frame.shape[0]
 
     # Save an annotated debug frame with marker perimeter and corner coordinates.
     debug_frame = frame.copy()
     corners, ids, _ = vision._detect_markers(frame)
+    # Keep original corners for visualization
+    if corners is not None and len(corners) > 0:
+        corners = np.array(corners)
+    # Draw markers in image space but label with robot coordinates
     if ids is not None and len(ids) > 0:
         cv2.aruco.drawDetectedMarkers(debug_frame, corners, ids)
         for i, corner in enumerate(corners):
@@ -207,9 +226,11 @@ def main():
             for idx, p in enumerate(pts):
                 px, py = int(p[0]), int(p[1])
                 cv2.circle(debug_frame, (px, py), 3, (0, 255, 255), -1)
+                # Show robot coordinates in label
+                py_robot = frame_h - py
                 cv2.putText(
                     debug_frame,
-                    f"{idx}:({px},{py})",
+                    f"{idx}:({px},{py_robot})",
                     (px + 4, py - 4),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.35,
@@ -218,25 +239,59 @@ def main():
                     cv2.LINE_AA,
                 )
 
+    # Now flip corners for downstream calculations
+    if corners is not None and len(corners) > 0:
+        corners[:, :, 1] = frame_h - corners[:, :, 1]
+
     debug_dir = Path(__file__).resolve().parent / "debug"
     debug_dir.mkdir(parents=True, exist_ok=True)
     debug_image_path = debug_dir / "capture.jpg"
-    cv2.imwrite(str(debug_image_path), debug_frame)
 
       #return (br_x, br_y), angle, [corners[selected_index]], marker_id
 
-    arm_center, arm_angle = vision.arm_coord(frame)
+    arm_br, arm_angle, arm_corners, arm_marker_id = vision.get_plate_pose(
+        frame, target_marker_id=vision.ARM_MARKER_ID
+    )
     br, angle, plate_corners, marker_id = vision.get_plate_pose(frame, target_marker_id=target_marker_id)
-    
+    br_img = br
+    angle_img = angle
+    plate_corners_img = plate_corners
+
+    arm_center = None
+    if arm_corners is not None:
+        arm_center = (
+            float(np.mean(arm_corners[:, 0])),
+            float(np.mean(arm_corners[:, 1])),
+        )
+
+    # Global image-space -> robot-space conversion for all pose values.
+    if arm_center is not None:
+        arm_center = to_robot_point(arm_center, frame_h)
+    if br is not None:
+        br = to_robot_point(br, frame_h)
+    if plate_corners is not None:
+        plate_corners = to_robot_corners(plate_corners, frame_h)
+    if arm_angle is not None:
+        arm_angle = -arm_angle
+    if angle is not None:
+        angle = -angle
+
     print(f"DEBUG: arm_angle (rad) = {arm_angle}, deg = {np.rad2deg(arm_angle)}")
     print(f"DEBUG: plate angle (rad) = {angle}, deg = {np.rad2deg(angle)}")
 
+    plate_scale = None
+    arm_scale = None
     if plate_corners is not None:
-            scale = vision.setScale(plate_corners, vision.PLATE_MARKER_DIMENSION_MM) 
-            br = (br[0]/scale, br[1]/scale) #convert from pixels to mm using scale
-            arm_center = (arm_center[0]/scale, arm_center[1]/scale) 
-    else: 
-        scale = None
+        # plate_corners is in robot frame but side lengths are invariant to Y flip
+        plate_scale = vision.setScale(plate_corners, vision.PLATE_MARKER_DIMENSION_MM)
+    if arm_corners is not None:
+        arm_corners_robot = to_robot_corners(arm_corners, frame_h)
+        arm_scale = vision.setScale(arm_corners_robot, vision.PLATE_MARKER_DIMENSION_MM)
+
+    if plate_scale is not None and br is not None:
+        br = (br[0] / plate_scale, br[1] / plate_scale)
+    if arm_scale is not None and arm_center is not None:
+        arm_center = (arm_center[0] / arm_scale, arm_center[1] / arm_scale)
 
 
     rel_angle = angle - arm_angle
@@ -245,28 +300,20 @@ def main():
     grid_points = plate.well_coordinate(translation_vector)
     rotated_grid = plate.rotate_grid(grid_points, rel_angle, translation_vector)
     first_row = rotated_grid[:plate.config["cols"]]
+
+    # Build a plate-angle-referenced row in absolute robot-frame mm for image overlay.
+    plate_top_left_abs = plate.marker_to_well(angle, br)
+    plate_grid_abs = plate.well_coordinate(plate_top_left_abs)
+    plate_grid_abs_rot = plate.rotate_grid(plate_grid_abs, angle, plate_top_left_abs)
+    first_row_plate_abs = plate_grid_abs_rot[:plate.config["cols"]]
+
+    # Inverse kinematics block now (already in robot frame)
     
-    #inverse kinematics block now
-    target_pos = []
-    target_scara = []
-    invalid_targets = []
-    for coord in first_row:
-        test_coord = [coord[0],-coord[1]] #testing with the different orientatoin
-        print(test_coord)
-        try:
-            scara = ik(test_coord)
-        except ValueError as exc:
-            invalid_targets.append({"coord": coord.tolist() if hasattr(coord, "tolist") else coord, "error": str(exc)})
-            continue
-        target_pos.append(coord)
-        target_scara.append(scara)
-
     target_pos = []
     target_scara = []
     invalid_targets = []
 
     for coord in first_row:
-        # coord is already arm-relative robot-frame mm
         try:
             scara = ik(coord.tolist())
         except ValueError as exc:
@@ -275,11 +322,33 @@ def main():
         target_pos.append(coord.tolist())
         target_scara.append(scara)
 
+    # Draw sample well row on debug image in image-relative coordinates.
+    # Use plate-angle-referenced absolute coordinates so overlay matches image orientation.
+    if plate_scale is not None:
+        for idx, coord_abs in enumerate(first_row_plate_abs):
+            px = int(round(coord_abs[0] * plate_scale))
+            py = int(round(frame_h - (coord_abs[1] * plate_scale)))
+
+            if 0 <= px < frame.shape[1] and 0 <= py < frame_h:
+                cv2.circle(debug_frame, (px, py), 5, (0, 0, 255), -1)
+                cv2.putText(
+                    debug_frame,
+                    f"T{idx}",
+                    (px + 6, py - 6),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.4,
+                    (0, 0, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
+
+    cv2.imwrite(str(debug_image_path), debug_frame)
+
     if args.preview:
         preview = frame.copy()
-        if plate_corners is not None:
-            cv2.aruco.drawDetectedMarkers(preview, plate_corners)
-            vision.draw_position_info(preview, angle, br)
+        if plate_corners_img is not None:
+            cv2.aruco.drawDetectedMarkers(preview, [np.array(plate_corners_img, dtype=np.float32).reshape(1, 4, 2)])
+            vision.draw_position_info(preview, angle_img, br_img)
         cv2.imshow("Plate Detection", preview)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
@@ -287,6 +356,8 @@ def main():
     output = {
         "plate_type_requested": args.plate_type,
         "plate_detected": br is not None,
+        "plate_scale_px_per_mm": plate_scale,
+        "arm_scale_px_per_mm": arm_scale,
         "angle": np.rad2deg(rel_angle),
         "target_coordinates": target_pos,
         "invalid_targets": invalid_targets,

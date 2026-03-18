@@ -7,7 +7,7 @@ import numpy as np
 
 class Plates:
     PLATE_CONFIGS = {
-        "96well": {"rows": 8, "cols": 12, "pitch_mmX": 9.0, "pitch_mmY": 9.0, "xApart": 17, "yApart": 14},
+        "96well": {"rows": 8, "cols": 12, "pitch_mmX": 10.5, "pitch_mmY": 10.5, "xApart": 16, "yApart": 15.5},
         "24well": {"rows": 4, "cols": 6, "pitch_mmX": 19.0, "pitch_mmY": 19.0, "xApart": 39, "yApart": 39},
         "12well": {"rows": 3, "cols": 4, "pitch_mmX": 26.0, "pitch_mmY": 26.0, "xApart": 52, "yApart": 52},
         "6well": {"rows": 2, "cols": 3, "pitch_mmX": 39.0, "pitch_mmY": 39.0, "xApart": 78, "yApart": 78},
@@ -44,7 +44,7 @@ class Plates:
     
     def well_coordinate(self, translation_vector): #topLeft array (x,y)
         x_coords = [translation_vector[0] + (i * self.config["pitch_mmX"]) for i in range(self.config["cols"])]
-        y_coords = [translation_vector[1] + (i * self.config["pitch_mmY"]) for i in range(self.config["rows"])]
+        y_coords = [translation_vector[1] - (i * self.config["pitch_mmY"]) for i in range(self.config["rows"])]
 
         # 2. Create the 2D grid (Matrix)
         X, Y = np.meshgrid(x_coords, y_coords)

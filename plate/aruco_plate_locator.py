@@ -17,7 +17,7 @@ class PlateVisionSystem:
     }
     ARM_MARKER_ID = 4
     PLATE_MARKER_IDS = {0, 1, 2, 3}
-    PLATE_MARKER_DIMENSION_MM = 32 #35
+    PLATE_MARKER_DIMENSION_MM = 35 #35
     
     def __init__(self, marker_dict=aruco.DICT_ARUCO_ORIGINAL): #DICT_4X4_50
         # Initialize ArUco settings

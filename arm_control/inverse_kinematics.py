@@ -1,5 +1,4 @@
-from math import acos, atan2, cos, sin, pi
-from numpy import rad2deg
+from math import acos, atan2, cos, sin, pi, degrees
 #import serial
 #import waypoints
 
@@ -10,8 +9,13 @@ ARM_SEGMENT_TWO = 200
 
 
 def inverse_kinematics(target_pos, elbow_direction=1):
-    #invert = False
-    
+    """Solve planar 2-link IK.
+
+    elbow_direction:
+        1  -> elbow-up branch
+        -1 -> elbow-down branch
+    """
+
     L1 = ARM_SEGMENT_ONE
     L2 = ARM_SEGMENT_TWO
     x = target_pos[0]   
@@ -20,28 +24,24 @@ def inverse_kinematics(target_pos, elbow_direction=1):
     # Law of cosines term for joint 2.
     # Keep a tiny tolerance for floating-point drift and fail clearly for unreachable targets.
     c2 = (x**2 + y**2 - L1**2 - L2**2) / (2 * L1 * L2)
+    tol = 1e-9
+    if c2 < -1.0 - tol or c2 > 1.0 + tol:
+        raise ValueError(f"Target {target_pos} is outside arm reach")
+    c2 = max(-1.0, min(1.0, c2))
 
-    theta2 = elbow_direction *acos(c2) #extrapolated l1 segment, angle between this and l2
-    hyp = atan2(y,x)
-    above_below = atan2((L2*sin(theta2)),(L1 + (L2*cos(theta2)))) #from x to joint1
-    if theta2 > 0:
-        above_below = -above_below
-
-    theta1 = hyp + above_below
-    theta1 = rad2deg(theta1)
+    theta2 = elbow_direction * acos(c2)  # angle between links
+    # Standard 2-link IK for shoulder. This naturally handles both elbow branches.
+    theta1 = atan2(y, x) - atan2(L2 * sin(theta2), L1 + L2 * cos(theta2))
+    theta1_deg = degrees(theta1)
 
     #NEED TO ADJUST theta2 logic based on where 'home' is set
     #lets assume 180 rotation and 'home' is perpendicular to joint1 on the right
     #the angle logic all depends on if joint2 only has 180 degrees, if more need to rethink
 
-    if theta2 >  0:
-        theta2 = theta2 + pi/2
-    else:
-        theta2 = pi/2 + theta2
+    theta2_servo = theta2 + pi / 2
+    theta2_deg = degrees(theta2_servo)
 
-    theta2 = rad2deg(theta2)
-
-    return (round(theta1.item(0),1), round(theta2.item(),1))
+    return (round(float(theta1_deg), 1), round(float(theta2_deg), 1))
 
 def smart_inverse_kinematics(target_pos, shoulder_limit=(0, 180)):
     # Try Elbow-Up first (elbow_direction = 1)
