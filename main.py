@@ -227,6 +227,10 @@ def main():
 
     arm_center, arm_angle = vision.arm_coord(frame)
     br, angle, plate_corners, marker_id = vision.get_plate_pose(frame, target_marker_id=target_marker_id)
+    
+    print(f"DEBUG: arm_angle (rad) = {arm_angle}, deg = {np.rad2deg(arm_angle)}")
+    print(f"DEBUG: plate angle (rad) = {angle}, deg = {np.rad2deg(angle)}")
+
     if plate_corners is not None:
             scale = vision.setScale(plate_corners, vision.PLATE_MARKER_DIMENSION_MM) 
             br = (br[0]/scale, br[1]/scale) #convert from pixels to mm using scale
@@ -235,55 +239,27 @@ def main():
         scale = None
 
 
-    # rel_angle = angle - arm_angle
-    # plate_topLeft = plate.marker_to_well(rel_angle, br)
-    # translation_vector = plate.top_left_to_arm(plate_topLeft, arm_center) # in mm (arm_center converted to mm)
-    # grid_points = plate.well_coordinate(translation_vector)
-    # rotated_grid = plate.rotate_grid(grid_points, rel_angle, translation_vector)
-    # first_row = rotated_grid[:plate.config["cols"]]
+    rel_angle = angle - arm_angle
+    plate_topLeft = plate.marker_to_well(rel_angle, br)
+    translation_vector = plate.top_left_to_arm(plate_topLeft, arm_center) # in mm (arm_center converted to mm)
+    grid_points = plate.well_coordinate(translation_vector)
+    rotated_grid = plate.rotate_grid(grid_points, rel_angle, translation_vector)
+    first_row = rotated_grid[:plate.config["cols"]]
     
-    # #inverse kinematics block now
-    # target_pos = []
-    # target_scara = []
-    # invalid_targets = []
-    # for coord in first_row:
-    #     test_coord = [coord[0],-coord[1]] #testing with the different orientatoin
-    #     print(test_coord)
-    #     try:
-    #         scara = ik(test_coord)
-    #     except ValueError as exc:
-    #         invalid_targets.append({"coord": coord.tolist() if hasattr(coord, "tolist") else coord, "error": str(exc)})
-    #         continue
-    #     target_pos.append(coord)
-    #     target_scara.append(scara)
-
-    # 1) Relative plate orientation: image frame (x right, y down)
-    rel_angle_img = angle - arm_angle
-
-    # 2) Convert angle to robot frame (y up => angle sign flips)
-    rel_angle_robot = -rel_angle_img
-
-    # 3) A1/top-left in image-mm (marker offset should use plate angle in image frame)
-    plate_topLeft_mm_img = np.array(plate.marker_to_well(angle, br), dtype=np.float64)
-
-    # 4) Move origin to arm center (still image frame)
-    arm_center_mm_img = np.array(arm_center, dtype=np.float64)
-    a1_arm_img = plate_topLeft_mm_img - arm_center_mm_img
-
-    # 5) Convert to robot frame once (flip y)
-    a1_arm_robot = np.array([a1_arm_img[0], -a1_arm_img[1]], dtype=np.float64)
-
-    # 6) Build first row directly in robot frame
-    pitch = plate.config["pitch_mmX"]
-    cols = plate.config["cols"]
-    local_row = np.array([[i * pitch, 0.0] for i in range(cols)], dtype=np.float64)
-
-    R = np.array([
-        [np.cos(rel_angle_robot), -np.sin(rel_angle_robot)],
-        [np.sin(rel_angle_robot),  np.cos(rel_angle_robot)],
-    ], dtype=np.float64)
-
-    first_row = local_row @ R.T + a1_arm_robot
+    #inverse kinematics block now
+    target_pos = []
+    target_scara = []
+    invalid_targets = []
+    for coord in first_row:
+        test_coord = [coord[0],-coord[1]] #testing with the different orientatoin
+        print(test_coord)
+        try:
+            scara = ik(test_coord)
+        except ValueError as exc:
+            invalid_targets.append({"coord": coord.tolist() if hasattr(coord, "tolist") else coord, "error": str(exc)})
+            continue
+        target_pos.append(coord)
+        target_scara.append(scara)
 
     target_pos = []
     target_scara = []
