@@ -287,7 +287,7 @@ def main():
     output = {
         "plate_type_requested": args.plate_type,
         "plate_detected": br is not None,
-        "angle": np.rad2deg(rel_angle_robot),
+        "angle": np.rad2deg(rel_angle),
         "target_coordinates": target_pos,
         "invalid_targets": invalid_targets,
         "target_scara_angles": target_scara,
