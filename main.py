@@ -197,6 +197,12 @@ def main():
     frame = preprocess_frame(raw_frame, undistort=not args.no_undistort)
     frame_h = frame.shape[0]
 
+    # Save the initial camera frame used as input for processing (before overlays).
+    debug_dir = Path(__file__).resolve().parent / "debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    debug_raw_image_path = debug_dir / "raw_capture.jpg"
+    cv2.imwrite(str(debug_raw_image_path), raw_frame)
+
     # Save an annotated debug frame with marker perimeter and corner coordinates.
     debug_frame = frame.copy()
     corners, ids, _ = vision._detect_markers(frame)
@@ -243,8 +249,6 @@ def main():
     if corners is not None and len(corners) > 0:
         corners[:, :, 1] = frame_h - corners[:, :, 1]
 
-    debug_dir = Path(__file__).resolve().parent / "debug"
-    debug_dir.mkdir(parents=True, exist_ok=True)
     debug_image_path = debug_dir / "capture.jpg"
 
       #return (br_x, br_y), angle, [corners[selected_index]], marker_id
