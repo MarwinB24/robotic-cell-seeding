@@ -17,7 +17,7 @@ class PlateVisionSystem:
     }
     ARM_MARKER_ID = 4
     PLATE_MARKER_IDS = {0, 1, 2, 3}
-    PLATE_MARKER_DIMENSION_MM = 35 #35
+    PLATE_MARKER_DIMENSION_MM = 32 #35
     
     def __init__(self, marker_dict=aruco.DICT_ARUCO_ORIGINAL): #DICT_4X4_50
         # Initialize ArUco settings
@@ -76,6 +76,51 @@ class PlateVisionSystem:
         center_y = np.mean(arm_coords[:, 1])
         center = (center_x, center_y)        
         return center, angle #returns just the centre of the marker
+
+    def preprocess_frame(self, frame, camera_matrix, dist_coeffs, undistort=True):
+        if not undistort:
+            return frame, camera_matrix, dist_coeffs
+        h, w = frame.shape[:2]
+        new_mtx, _ = cv2.getOptimalNewCameraMatrix(camera_matrix, dist_coeffs, (w, h), 1, (w, h))
+        undistorted = cv2.undistort(frame, camera_matrix, dist_coeffs, None, new_mtx)
+        # Distortion has already been removed in undistorted image space.
+        return undistorted, new_mtx, np.zeros_like(dist_coeffs)
+
+    @staticmethod
+    def to_robot_point(pt, frame_height):
+        if pt is None:
+            return None
+        return (pt[0], frame_height - pt[1])
+
+    @staticmethod
+    def to_robot_corners(marker_corners, frame_height):
+        if marker_corners is None:
+            return None
+        marker_corners = np.array(marker_corners, dtype=np.float32)
+        marker_corners[:, 1] = frame_height - marker_corners[:, 1]
+        return marker_corners
+
+    @staticmethod
+    def estimate_marker_z_mm(marker_corners, marker_size_mm, camera_matrix, dist_coeffs):
+        """Estimate marker depth (camera Z, mm) using solvePnP on ArUco corners."""
+        if marker_corners is None:
+            return None
+
+        img_pts = np.array(marker_corners, dtype=np.float32).reshape(4, 2)
+        half = float(marker_size_mm) / 2.0
+        # ArUco corner order: top-left, top-right, bottom-right, bottom-left.
+        obj_pts = np.array([
+            [-half, half, 0.0],
+            [half, half, 0.0],
+            [half, -half, 0.0],
+            [-half, -half, 0.0],
+        ], dtype=np.float32)
+
+        pnp_flag = getattr(cv2, "SOLVEPNP_IPPE_SQUARE", cv2.SOLVEPNP_ITERATIVE)
+        ok, _rvec, tvec = cv2.solvePnP(obj_pts, img_pts, camera_matrix, dist_coeffs, flags=pnp_flag)
+        if not ok:
+            return None
+        return float(tvec[2][0])
 
     def setScale(self, corner, markerDimension): #pixel distance device by scale gives mm
         c = corner.astype(np.float32)  # shape (4,2)

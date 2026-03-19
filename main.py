@@ -47,12 +47,14 @@ def parse_args():
                         help="Disable Picamera2 and force OpenCV camera capture")
     parser.add_argument("--preview", action="store_true",
                         help="Show preview window for laptop debugging")
-    parser.add_argument("--lock-exposure", action="store_true",
-                        help="Disable auto exposure when camera backend supports it")
-    parser.add_argument("--exposure-us", type=int,
-                        help="Manual exposure time in microseconds (Picamera2)")
-    parser.add_argument("--analogue-gain", type=float,
-                        help="Manual analog gain (Picamera2)")
+    parser.add_argument("--exposure-us", type=int, default=12000,
+                        help="Manual exposure time in microseconds (Picamera2 default: 12000)")
+    parser.add_argument("--analogue-gain", type=float, default=1.5,
+                        help="Manual analog gain (Picamera2 default: 1.5)")
+    parser.add_argument("--camera-to-plate-mm", type=float,
+                        help="Approx camera optical-center distance to plate plane in mm (quick depth correction)")
+    parser.add_argument("--arm-above-plate-mm", type=float,
+                        help="Approx arm-marker height above plate plane in mm (quick depth correction)")
     parser.add_argument("--no-undistort", action="store_true",
                         help="Skip applying camera undistortion")
     parser.add_argument("--pretty-json", action="store_true",
@@ -60,7 +62,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def _open_picamera2(width, height, fps, lock_exposure=False, exposure_us=None, analogue_gain=None):
+def _open_picamera2(width, height, fps, exposure_us=12000, analogue_gain=1.5):
     try:
         picamera2_module = importlib.import_module("picamera2")
         Picamera2 = picamera2_module.Picamera2
@@ -68,13 +70,12 @@ def _open_picamera2(width, height, fps, lock_exposure=False, exposure_us=None, a
         return None, None
 
     picam2 = Picamera2()
-    controls = {"FrameDurationLimits": (int(1e6 / fps), int(1e6 / fps))}
-    if lock_exposure:
-        controls["AeEnable"] = False
-        if exposure_us is not None:
-            controls["ExposureTime"] = int(exposure_us)
-        if analogue_gain is not None:
-            controls["AnalogueGain"] = float(analogue_gain)
+    controls = {
+        "FrameDurationLimits": (int(1e6 / fps), int(1e6 / fps)),
+        "AeEnable": False,
+        "ExposureTime": int(exposure_us),
+        "AnalogueGain": float(analogue_gain),
+    }
 
     config = picam2.create_preview_configuration(main={"size": (width, height), "format": "RGB888"}, controls=controls)
     picam2.configure(config)
@@ -82,15 +83,14 @@ def _open_picamera2(width, height, fps, lock_exposure=False, exposure_us=None, a
     return "picamera2", picam2
 
 
-def _open_opencv_camera(index, width, height, fps, lock_exposure=False):
+def _open_opencv_camera(index, width, height, fps):
     cap = cv2.VideoCapture(index)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
     cap.set(cv2.CAP_PROP_FPS, fps)
 
-    if lock_exposure:
-        # Backend-specific: these values are best-effort and may vary by driver.
-        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+    # Backend-specific: this is best-effort and may vary by driver.
+    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
 
     if not cap.isOpened():
         return None, None
@@ -103,7 +103,6 @@ def open_camera(args):
             args.width,
             args.height,
             args.fps,
-            lock_exposure=args.lock_exposure,
             exposure_us=args.exposure_us,
             analogue_gain=args.analogue_gain,
         )
@@ -115,7 +114,6 @@ def open_camera(args):
         args.width,
         args.height,
         args.fps,
-        lock_exposure=args.lock_exposure,
     )
     if mode is None:
         raise RuntimeError("Unable to open camera via Picamera2 or OpenCV")
@@ -140,28 +138,6 @@ def close_camera(camera_mode, camera):
         camera.close()
         return
     camera.release()
-
-
-def preprocess_frame(frame, undistort=True):
-    if not undistort:
-        return frame
-    h, w = frame.shape[:2]
-    new_mtx, _ = cv2.getOptimalNewCameraMatrix(DEFAULT_CAMERA_MATRIX, DEFAULT_DIST_COEFFS, (w, h), 1, (w, h))
-    return cv2.undistort(frame, DEFAULT_CAMERA_MATRIX, DEFAULT_DIST_COEFFS, None, new_mtx)
-
-
-def to_robot_point(pt, frame_height):
-    """Convert an (x, y) image-space point to robot/cartesian space."""
-    return (pt[0], frame_height - pt[1])
-
-
-def to_robot_corners(marker_corners, frame_height):
-    """Convert marker corners array from image-space to robot/cartesian space."""
-    if marker_corners is None:
-        return None
-    marker_corners = np.array(marker_corners, dtype=np.float32)
-    marker_corners[:, 1] = frame_height - marker_corners[:, 1]
-    return marker_corners
 
 
 def capture_single_frame(args):
@@ -194,7 +170,12 @@ def main():
     target_marker_id = 0
     plate = Plates(vision.ID_TO_TYPE.get(target_marker_id))
     camera_mode, raw_frame = capture_single_frame(args)
-    frame = preprocess_frame(raw_frame, undistort=not args.no_undistort)
+    frame, pose_camera_matrix, pose_dist_coeffs = vision.preprocess_frame(
+        raw_frame,
+        DEFAULT_CAMERA_MATRIX,
+        DEFAULT_DIST_COEFFS,
+        undistort=not args.no_undistort,
+    )
     frame_h = frame.shape[0]
 
     # Save the initial camera frame used as input for processing (before overlays).
@@ -270,11 +251,11 @@ def main():
 
     # Global image-space -> robot-space conversion for all pose values.
     if arm_center is not None:
-        arm_center = to_robot_point(arm_center, frame_h)
+        arm_center = vision.to_robot_point(arm_center, frame_h)
     if br is not None:
-        br = to_robot_point(br, frame_h)
+        br = vision.to_robot_point(br, frame_h)
     if plate_corners is not None:
-        plate_corners = to_robot_corners(plate_corners, frame_h)
+        plate_corners = vision.to_robot_corners(plate_corners, frame_h)
     if arm_angle is not None:
         arm_angle = -arm_angle
     if angle is not None:
@@ -285,17 +266,87 @@ def main():
 
     plate_scale = None
     arm_scale = None
+    arm_scale_projected_to_plate = None
+    depth_ratio_arm_to_plate = None
+    depth_ratio_source = None
+    pose_z_plate_mm = None
+    pose_z_arm_mm = None
     if plate_corners is not None:
         # plate_corners is in robot frame but side lengths are invariant to Y flip
         plate_scale = vision.setScale(plate_corners, vision.PLATE_MARKER_DIMENSION_MM)
     if arm_corners is not None:
-        arm_corners_robot = to_robot_corners(arm_corners, frame_h)
+        arm_corners_robot = vision.to_robot_corners(arm_corners, frame_h)
         arm_scale = vision.setScale(arm_corners_robot, vision.PLATE_MARKER_DIMENSION_MM)
+
+    # Preferred shortcut: estimate both marker depths from pose, then project arm scale to plate depth.
+    if arm_scale is not None and arm_corners is not None and plate_corners_img is not None:
+        pose_z_plate_mm = vision.estimate_marker_z_mm(
+            plate_corners_img,
+            vision.PLATE_MARKER_DIMENSION_MM,
+            pose_camera_matrix,
+            pose_dist_coeffs,
+        )
+        pose_z_arm_mm = vision.estimate_marker_z_mm(
+            arm_corners,
+            vision.PLATE_MARKER_DIMENSION_MM,
+            pose_camera_matrix,
+            pose_dist_coeffs,
+        )
+        if pose_z_plate_mm is not None and pose_z_arm_mm is not None and pose_z_plate_mm > 0 and pose_z_arm_mm > 0:
+            depth_ratio_arm_to_plate = pose_z_arm_mm / pose_z_plate_mm
+            arm_scale_projected_to_plate = arm_scale * depth_ratio_arm_to_plate
+            depth_ratio_source = "pose"
+
+    # Fallback shortcut using user-provided distances if pose-derived ratio is unavailable.
+    # (px/mm)_plate ~= (px/mm)_arm * (Z_arm / Z_plate)
+    if (
+        arm_scale_projected_to_plate is None
+        and arm_scale is not None
+        and args.camera_to_plate_mm is not None
+        and args.arm_above_plate_mm is not None
+    ):
+        z_plate = float(args.camera_to_plate_mm)
+        z_arm = z_plate - float(args.arm_above_plate_mm)
+        if z_plate > 0 and z_arm > 0:
+            depth_ratio_arm_to_plate = z_arm / z_plate
+            arm_scale_projected_to_plate = arm_scale * depth_ratio_arm_to_plate
+            depth_ratio_source = "manual"
+
+    if arm_scale_projected_to_plate is not None:
+        effective_arm_scale = arm_scale_projected_to_plate
+    else:
+        effective_arm_scale = arm_scale
+
+    def _fmt_opt(v, digits=3):
+        if v is None:
+            return "n/a"
+        return f"{float(v):.{digits}f}"
+
+    # Draw scale/depth diagnostics so z-projection impact is visible in debug image.
+    overlay_lines = [
+        f"plate_scale: {_fmt_opt(plate_scale)} px/mm",
+        f"arm_scale_raw: {_fmt_opt(arm_scale)} px/mm",
+        f"arm_scale_proj: {_fmt_opt(arm_scale_projected_to_plate)} px/mm",
+        f"depth_ratio: {_fmt_opt(depth_ratio_arm_to_plate)} src:{depth_ratio_source or 'none'}",
+        f"z_plate: {_fmt_opt(pose_z_plate_mm, 1)} mm z_arm: {_fmt_opt(pose_z_arm_mm, 1)} mm",
+    ]
+    for i, line in enumerate(overlay_lines):
+        y = 22 + (i * 18)
+        cv2.putText(
+            debug_frame,
+            line,
+            (12, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (0, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
 
     if plate_scale is not None and br is not None:
         br = (br[0] / plate_scale, br[1] / plate_scale)
-    if arm_scale is not None and arm_center is not None:
-        arm_center = (arm_center[0] / arm_scale, arm_center[1] / arm_scale)
+    if effective_arm_scale is not None and arm_center is not None:
+        arm_center = (arm_center[0] / effective_arm_scale, arm_center[1] / effective_arm_scale)
 
 
     rel_angle = angle - arm_angle
@@ -334,13 +385,13 @@ def main():
             py = int(round(frame_h - (coord_abs[1] * plate_scale)))
 
             if 0 <= px < frame.shape[1] and 0 <= py < frame_h:
-                cv2.circle(debug_frame, (px, py), 5, (0, 0, 255), -1)
+                cv2.circle(debug_frame, (px, py), 3, (0, 0, 255), -1)
                 cv2.putText(
                     debug_frame,
                     f"T{idx}",
-                    (px + 6, py - 6),
+                    (px + 4, py - 4),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.4,
+                    0.32,
                     (0, 0, 255),
                     1,
                     cv2.LINE_AA,
@@ -362,6 +413,11 @@ def main():
         "plate_detected": br is not None,
         "plate_scale_px_per_mm": plate_scale,
         "arm_scale_px_per_mm": arm_scale,
+        "arm_scale_projected_to_plate_px_per_mm": arm_scale_projected_to_plate,
+        "depth_ratio_arm_to_plate": depth_ratio_arm_to_plate,
+        "depth_ratio_source": depth_ratio_source,
+        "pose_z_plate_mm": pose_z_plate_mm,
+        "pose_z_arm_mm": pose_z_arm_mm,
         "angle": np.rad2deg(rel_angle),
         "target_coordinates": target_pos,
         "invalid_targets": invalid_targets,
@@ -374,7 +430,7 @@ def main():
         #     ]
         #     if marker_id is not None
         # ],
-        "success": bool(br[0] is not None and arm_center is not None and len(invalid_targets) == 0),
+        "success": bool(br is not None and arm_center is not None and len(invalid_targets) == 0),
     }
 
     json_text = json.dumps(
